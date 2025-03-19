@@ -17,6 +17,13 @@ def bandpass_filter_all(part, lowcut = 1, highcut = 40, fs = 200, order = 5):
         filtered_part[channel] = filtfilt(b, a, part[channel])
     return filtered_part
 
+def bandpass_filter_arr(signal, lowcut = 1, highcut = 40, fs = 200, order = 5):
+    nyquist = 0.5 * fs
+    low = lowcut / nyquist
+    high = highcut / nyquist
+    b, a = butter(order, [low, high], btype='band')
+    return filtfilt(b, a, signal)
+
 # The paper that describes the experiment setup says that the letter chosen is displayed for 1.3s => after = 1.3 by default
 def get_part_after_feedback(data, feedback_times, feedback_id = 0, before = 0.2, after = 1.3):
     t = feedback_times.iloc[feedback_id]
