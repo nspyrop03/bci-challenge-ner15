@@ -5,6 +5,7 @@ from scipy.signal import butter, filtfilt
 
 # List of important channels for the P300 speller paradigm as found in bibliography
 important_channels = ['Cz', 'Pz', 'FCz', 'Fz', 'C1', 'CP1', 'CPz', 'CP2', 'C2', 'C3', 'FC3', 'P1', 'FC1', 'FC2', 'F1', 'C4']
+train_subjects = ['02', '06', '07', '11', '12', '13', '14', '16', '17', '18', '20', '21', '22', '23', '24', '26']
 
 def bandpass_filter_all(part, lowcut = 1, highcut = 40, fs = 200, order = 5):
     nyquist = 0.5 * fs
