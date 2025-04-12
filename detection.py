@@ -37,16 +37,32 @@ class FileProcessor:
 
         return break_time, part_mean
     
+    # All the methods get the part after the given feedback_id.
+    # Hence, when feedback_id=0 they get the part for the second letter
+    # That's why I introduce feedback_id=-1 to work for the first letter.
+    # The problem is that before the first letter there is a variant "test" phase.
+    # To deal with this, I calculate the mean of the min and the max time of the erp segment
+    # and use it as the duration of the erp segment for the first letter.
     def get_erp_segment(self, feedback_id, channel):
-        break_time, _ = self.get_break_after_feedback(feedback_id, channel)
-        
-        t1 = self.feedback_times.iloc[feedback_id] + 1.3 + break_time
-        if feedback_id < self.feedback_indices.size - 1:
-            t2 = self.feedback_times.iloc[feedback_id + 1]
-        else:
-            t2 = self.filtered_data['Time'].iloc[-1]
         part = self.filtered_data[channel].to_numpy()
-        part = part[int(t1*self.fs):int(t2*self.fs)+1]
+
+        if feedback_id >= 0:
+            break_time, _ = self.get_break_after_feedback(feedback_id, channel)
+            
+            t1 = self.feedback_times.iloc[feedback_id] + 1.3 + break_time
+            if feedback_id < self.feedback_indices.size - 1:
+                t2 = self.feedback_times.iloc[feedback_id + 1]
+            else:
+                t2 = self.filtered_data['Time'].iloc[-1]
+            
+            part = part[int(t1*self.fs):int(t2*self.fs)+1]
+
+        else:
+            duration = 9.3 
+            t1 = self.feedback_times.iloc[0] - duration
+            t2 = self.feedback_times.iloc[0]
+            
+            part = part[int(t1*self.fs):int(t2*self.fs)+1]
 
         return part
         
@@ -145,7 +161,8 @@ class FileProcessor:
     
     def extract_all_features(self, verbose=False):
         features = []
-        for id in range(self.feedback_indices.size-1):
+        # Starting from -1 to get the first letter as introduced in get_erp_segment()
+        for id in range(-1, self.feedback_indices.size-1):
             temp = self.extract_features(id)
             if verbose: print(f'shape for id {id} is {temp.shape}')
             features.append(temp)
@@ -198,13 +215,14 @@ class FileProcessor:
             errp = []
             for channel in important_channels:
                 check, signal, latency = self.find_errp(id, channel, n, threshold, before, after, lat_fix, verbose)
-                if check:
-                    mean = np.mean(signal)
-                    peak = np.max(signal)
-                    amplitude = peak - np.min(signal)
-                    errp.extend([mean, peak, latency, amplitude])
-                else:
-                    errp.extend([0, 0, 0, 0])
+                
+                mean = np.mean(signal)
+                peak = np.max(signal)
+                amplitude = peak - np.min(signal)
+                
+                # added whether it's considered an errp or not as a feature
+                errp.extend([check, mean, peak, latency, amplitude])
+                
             if verbose: print(f'Feedback {id} with {len(errp)} features')
             errps.append(errp)
         return np.array(errps)
