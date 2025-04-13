@@ -228,7 +228,8 @@ class FileProcessor:
         return np.array(errps)
     
 class SubjectData:
-    def __init__(self, subject_name = "06"):
+    def __init__(self, subject_name = "06", train=True):
+        self.train = train
         self.subject_name = subject_name
         self.cache_p300 = f'cache/subject_{subject_name}_p300.npy'
         self.cache_errp = f'cache/subject_{subject_name}_errp.npy'
@@ -240,8 +241,9 @@ class SubjectData:
         else:
             features_p300 = []
             features_errp = []
+            prefix_path = 'data/train' if self.train else 'data/test'
             for i in range(1, 6):
-                file_path = f'data/train/Data_S{self.subject_name}_Sess0{i}.csv'
+                file_path = f'{prefix_path}/Data_S{self.subject_name}_Sess0{i}.csv'
                 fp = FileProcessor(file_path)
                 features_p300.append(fp.extracted_features)
                 features_errp.append(fp.errps)
