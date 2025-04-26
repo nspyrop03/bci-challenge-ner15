@@ -45,3 +45,26 @@ def plot_signal(signal, ylabel = 'Amplitude', title = None):
     plt.ylabel(ylabel)
     plt.title(title)
     plt.show()
+
+def plot_feedback_time_diffs(feedback_times, feedback_indices, save_png=False, png_name=None, verbose=False):
+    print(f'There are {len(feedback_times)} feedback times')
+    time_diffs = []
+    time_bounds = []
+    for i in range(len(feedback_indices)):
+        if i == 0:
+            if verbose: print(f'[word {int(i/5)}, letter {i%5}] {feedback_times.iloc[i]}')
+        else:
+            diff = feedback_times.iloc[i] - feedback_times.iloc[i-1]
+            time_diffs.append(diff)
+            if i%5 == 0: time_bounds.append(i-1)
+            if verbose: print(f'[word {int(i/5)}, letter {i%5}] {diff}')
+
+    plt.figure(figsize=(8, 6))
+    for x_line in time_bounds:
+        plt.axvline(x=x_line, color='r', linestyle='--', linewidth=1)
+    plt.plot(time_diffs, 'o')
+    plt.xlabel("Feedback diff index")
+    plt.ylabel("Time (s)")
+    plt.title("Time between feedbacks")
+    if save_png: plt.savefig(f"docs/images/{png_name}.png")
+    plt.show()
