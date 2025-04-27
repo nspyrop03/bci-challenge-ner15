@@ -1,12 +1,13 @@
 import pandas as pd
 import numpy as np
 from scipy.signal import find_peaks
-from sklearn.cluster import DBSCAN
+from sklearn.cluster import DBSCAN, KMeans
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from utils import important_channels
 import utils
 import os
+import template
 
 class FileProcessor:
     def __init__(self, file_path):
@@ -16,6 +17,11 @@ class FileProcessor:
         self.fs = 200 # sampling frequency
         self.default_channel = important_channels[0] # channel Cz
 
+        # Check if it's the 5th session.
+        # In the 5th session there may be a correction after the feedback that
+        # lasts one additional second. So we have to keep this in mind
+        self.is_last_session = "Sess05" in file_path
+
         # filter the data
         temp = utils.bandpass_filter_all(self.raw_data, highcut=30)
         self.filtered_data = utils.bandpass_filter_all(temp, lowcut=0.2, highcut=10)
@@ -23,12 +29,58 @@ class FileProcessor:
         self.extracted_features = self.extract_all_features()
         self.errps = self.find_errp_all()
 
+    # Helper function for the 5th session to cluster the feeedback time distances
+    # and find whether there was a correction or not.
+    # There are 4 classes:
+    # 1) Normal-letter no correction
+    # 2) Normal-letter with correction
+    # 3) Last-letter no correction
+    # 4) Last-letter with correction
+    def __cluster_time_diff(self, diff_values, n_clusters=4):
+        diff_values = diff_values.reshape(-1, 1)  # shape (n_samples, 1)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        labels = kmeans.fit_predict(diff_values)
+        return labels
+
+    def get_feedback_diffs(self):
+        time_diffs = []
+        for i in range(1, len(self.feedback_indices)):
+            diff = self.feedback_times.iloc[i] - self.feedback_times.iloc[i-1]
+            time_diffs.append(diff)
+        return time_diffs
+
+    def get_feedback_labels(self):
+        if not self.is_last_session: return None
+        return self.__cluster_time_diff(self.get_feedback_diffs())
+    
+    # Return True if after the feedback with id "feedback_id" follows 
+    # a correction segment that lasts 1 second
+    def has_feedback_correction(self, feedback_id):
+        if not self.is_last_session: return False
+
+        time_diffs = self.get_feedback_diffs()
+        labels = self.get_feedback_labels()
+        levels = {0:[], 1:[], 2:[], 3:[]}
+        for i in range(len(labels)):
+            levels[labels[i]].append(time_diffs[i])
+        for key in levels.keys():
+            levels[key] = np.mean(levels[key])
+
+        sorted_keys = sorted(levels, key=levels.get)
+        
+        # labels that indicate that correction follows
+        correction_labels = [sorted_keys[1], sorted_keys[3]]
+        return labels[feedback_id] in correction_labels
+
     def is_last_letter(self, feedback_id):
         return feedback_id % 5 == 4
 
     def get_break_after_feedback(self, feedback_id, channel):
         break_time = 4.5 if self.is_last_letter(feedback_id) else 0.5
         
+        # If correction follows the feedback segment, add 1 second
+        if self.has_feedback_correction(feedback_id): break_time += 1
+
         t1 = self.feedback_times.iloc[feedback_id] + 1.3 # end of feedback
         t2 = t1 + break_time
         part = self.filtered_data[channel].to_numpy()
@@ -103,6 +155,21 @@ class FileProcessor:
         data['blinking_processed'] = data['blinking_raw'] - between_break_mean
 
         return data
+    
+    def get_erp_templates(self):
+        # template_data = {
+        #   "index": 0 to len-1,
+        #   "type": "green/blinking",
+        #   "template": Template(...)
+        # } 
+        template_data_list = []
+
+        # i from -1 to 58 or 98 -> after feedback with id 0 to 59 or 99
+        for i in range(-1, len(self.feedback_indices)-1):
+            for channel in important_channels:
+                raw_data = self.get_important_parts(i, channel)
+
+        return template_data_list
 
     def sliding_window(self, feedback_id, channel):
         data = self.get_important_parts(feedback_id, channel)

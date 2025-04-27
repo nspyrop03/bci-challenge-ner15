@@ -3,6 +3,10 @@ from numpy.linalg import norm
 import matplotlib.pyplot as plt
 
 class Template:
+    # errp_raw has to be a numpy array of shape (n_sequences, n_channels, n_samples)
+    # That's because for the template of ErrP signals we get the coherent average
+    # of every feedback segment.
+    # There is no problem if n_sequences == 1
     def __init__(self, errp_raw):        
         min_samples = min(arr.shape[1] for arr in errp_raw)
         truncated = [arr[:, :min_samples] for arr in errp_raw]
