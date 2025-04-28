@@ -1,6 +1,7 @@
 import numpy as np
 from numpy.linalg import norm
 import matplotlib.pyplot as plt
+from utils import important_channels
 
 class Template:
     # errp_raw has to be a numpy array of shape (n_sequences, n_channels, n_samples)
@@ -11,6 +12,8 @@ class Template:
         self.errp_raw = errp_raw
 
     def get_coherent_average(self):
+        if self.errp_raw.ndim == 2:
+            self.errp_raw = np.expand_dims(self.errp_raw, axis=0)
         return np.mean(self.errp_raw, axis=0)
     
     def get_resampled_and_normalized_curve(self, S=32):
@@ -20,6 +23,7 @@ class Template:
         Returns: list of resampled & normalized curves, one per channel
         """
         signal = self.get_coherent_average()
+        #print(f"errp_raw: {self.errp_raw.shape} - signal: {signal.shape}")
         n_channels, T = signal.shape
         delta = T // (S + 1)
         
@@ -62,7 +66,7 @@ class Template:
         plt.tight_layout()
         plt.show()
 
-    def __compute_shcc(x, y):
+    def __compute_shcc(self, x, y):
         """
         x, y: normalized coordinates of a resampled ERP curve
         Returns:
@@ -101,8 +105,18 @@ class TemplateComparer:
         return np.array(distance)
     
     def get_area_difference(self):
-        template_curve = self.basic_template.get_resampled_and_normalized_curve()
-        trial_curve = self.trial_template.get_resampled_and_normalized_curve()
+        temp_data = self.basic_template.get_resampled_and_normalized_curve()
+        trial_data = self.trial_template.get_resampled_and_normalized_curve()
+        template_curve = []
+        trial_curve = []
+        for ch in range(len(important_channels)):
+            _, y = temp_data[ch]
+            template_curve.append(y)
+            _, y = trial_data[ch]
+            trial_curve.append(y)
+        template_curve = np.array(template_curve)
+        trial_curve = np.array(trial_curve)
+
         A_template = 0.5 * (template_curve[:, :-1] + template_curve[:, 1:]) 
         A_candidate = 0.5 * (trial_curve[:, :-1] + trial_curve[:, 1:])
 
@@ -121,7 +135,8 @@ class TemplateComparer:
         return 1 - (x / (np.max(x) + 1e-6))
 
     def get_area_similarity(self):
-        return self.norm_similarity(self.get_area_difference())
+        _, total_diff = self.get_area_difference()
+        return self.norm_similarity(total_diff)
     
     def get_chains_similarity(self):
         return self.norm_similarity(self.get_chains_distance())
@@ -140,7 +155,7 @@ class TemplateComparer:
         return sig1[:, :L], sig2[:, :L]
 
     def get_pearson_correlation(self):
-        sig1, sig2 = self.__truncate_if_need(self.basic_template.errp_raw, self.trial_template.errp_raw)
+        sig1, sig2 = self.__truncate_if_need(self.basic_template.get_coherent_average(), self.trial_template.get_coherent_average())
         n_channels = sig1.shape[0]
         pearson_scores = np.zeros(n_channels)
         for ch in range(n_channels):
@@ -149,15 +164,16 @@ class TemplateComparer:
         return pearson_scores
     
     def get_cosine_similarity(self):
-        sig1, sig2 = self.__truncate_if_need(self.basic_template.errp_raw, self.trial_template.errp_raw)
+        sig1, sig2 = self.__truncate_if_need(self.basic_template.get_coherent_average(), self.trial_template.get_coherent_average())
         n_channels = sig1.shape[0]
         cosine_scores = np.zeros(n_channels)
         for ch in range(n_channels):
             cosine_scores[ch] = np.dot(sig1[ch], sig2[ch]) / (norm(sig1[ch]) * norm(sig2[ch]) + 1e-8)
+            cosine_scores[ch] = (cosine_scores[ch] + 1) / 2
         return cosine_scores
     
     def get_cross_correlation_peak(self):
-        sig1, sig2 = self.__truncate_if_need(self.basic_template.errp_raw, self.trial_template.errp_raw)
+        sig1, sig2 = self.__truncate_if_need(self.basic_template.get_coherent_average(), self.trial_template.get_coherent_average())
         n_channels = sig1.shape[0]
         crosscorr_scores = np.zeros(n_channels)
         for ch in range(n_channels):

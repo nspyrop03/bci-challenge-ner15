@@ -51,7 +51,7 @@ class FileProcessor:
 
     def get_feedback_labels(self):
         if not self.is_last_session: return None
-        return self.__cluster_time_diff(self.get_feedback_diffs())
+        return self.__cluster_time_diff(np.array(self.get_feedback_diffs()))
     
     def get_feedbacks_with_correction(self):
         if not self.is_last_session: return None
@@ -137,6 +137,16 @@ class FileProcessor:
             return 2.64 if d1 < d2 else 5.28
         else:
             return 5.28
+        
+    def get_isShort_labels(self):
+        if self.is_last_session:
+            return [1] * 100 # 5th session has only short blinking durations
+
+        labels = []
+        for i in range(-1, len(self.feedback_indices)-1):
+            t = self.get_blinking_time(i, important_channels[0])
+            labels.append(t < 3)
+        return labels
 
     def get_important_parts(self, feedback_id, channel, extra_offset = 0.1):
         erp_segment = self.get_erp_segment(feedback_id, channel)
@@ -203,7 +213,11 @@ class FileProcessor:
             window_step = int(0.25 * self.fs)
             n_windows = (min_length - window_size) // window_step + 1
             for window in range(n_windows):
-                part = blinking_raw[:, window*window_step:window*window_step+window_size]
+                #part = blinking_raw[:, window*window_step:window*window_step+window_size]
+                part = [inner_list[window*window_step:window*window_step+window_size] for inner_list in blinking_raw]
+                min_length = min(len(channel_data) for channel_data in part)
+                part = [channel_data[:min_length] for channel_data in part]
+                part = np.array(part)
                 part = part[np.newaxis, :, :]
                 template_data_list.append({
                     "index": i+1,
@@ -211,7 +225,19 @@ class FileProcessor:
                     "template": Template(part)
                 })
 
-            errp_data.append(self.get_feedback_erp_raw(i+1))
+            fb_raw = self.get_feedback_erp_raw(i+1)
+            min_samples = min(len(arr) for arr in fb_raw)
+            fb_raw = [arr[:min_samples] for arr in fb_raw]
+            fb_raw = np.array(fb_raw)
+            errp_data.append(fb_raw)
+
+            fb_raw = fb_raw[np.newaxis, :, :]
+            template_data_list.append({
+                "index": i+1,
+                "type": "feedback",
+                "template": Template(fb_raw)
+            })
+
         min_samples = min(arr.shape[1] for arr in errp_data)
         errp_data = [arr[:, :min_samples] for arr in errp_data]
         errp_data = np.array(errp_data)
@@ -367,59 +393,67 @@ class SubjectData:
         self.subject_name = subject_name
         self.cache_p300 = f'cache/subject_{subject_name}_p300.npy'
         self.cache_errp = f'cache/subject_{subject_name}_errp.npy'
-        self.raw_features, self.errp_features = self.__load_data()
+        #self.raw_features, self.errp_features = self.__load_data()
         
         self.cache_template = f'cache/template/subject_{subject_name}'
         self.ctemp_positive = f'{self.cache_template}_positive.npy'
         self.ctemp_negative = f'{self.cache_template}_negative.npy'
         self.ctemp_feedback = f'{self.cache_template}_feedback.npy'
+        self.ctemp_feedback_list = f'{self.cache_template}_feedback_list.npy'
         self.ctemp_green = f'{self.cache_template}_green.npy'
-        self.positive_template, self.negative_template, self.feedback_templates, self.green_templates = self.__load_templates()
-    
+        #self.positive_template, self.negative_template, self.feedback_templates, self.feedback_template_list, self.green_templates = self.__load_templates()
+
+        self.cache_is_short = f'cache/subject_{subject_name}_isShort.npy'
+        #self.is_short = self.__load_is_short()
+
+        self.raw_features, self.errp_features, self.positive_template, self.negative_template, self.feedback_templates, self.feedback_template_list, self.green_templates, self.is_short = self.__load_data()      
+
+        self.cache_fb_sim = f'cache/template/similarity/subject_{subject_name}_fb_sim.npy'
+        self.cache_green_sim = f'cache/template/similarity/subject_{subject_name}_green_sim.npy'
+
+    def __truncate_lists(self, data):
+        # Find the minimum samples length across all arrays
+        min_samples = min(arr.shape[2] for arr in data)
+        # Truncate all arrays to this minimum length
+        truncated_arrays = [arr[:, :, :min_samples] for arr in data]
+        return truncated_arrays
+
     def __load_data(self):
-        if os.path.exists(self.cache_p300) and os.path.exists(self.cache_errp):
-            return np.load(self.cache_p300), np.load(self.cache_errp)
-        else:
-            features_p300 = []
-            features_errp = []
-            prefix_path = 'data/train' if self.train else 'data/test'
-            for i in range(1, 6):
-                file_path = f'{prefix_path}/Data_S{self.subject_name}_Sess0{i}.csv'
-                fp = FileProcessor(file_path)
-                features_p300.append(fp.extracted_features)
-                features_errp.append(fp.errps)
-            features_p300 = np.vstack(features_p300)
-            features_errp = np.vstack(features_errp)
-
-            os.makedirs(os.path.dirname(self.cache_p300), exist_ok=True)
-            np.save(self.cache_p300, features_p300)
-            np.save(self.cache_errp, features_errp)
-            
-            return features_p300, features_errp
-
-    def __load_templates(self) -> tuple[Template, Template, list[Template], list[Template]]:
-        if os.path.exists(self.ctemp_positive) and os.path.exists(self.ctemp_negative) and os.path.exists(self.ctemp_feedback) and os.path.exists(self.ctemp_green):
+        if os.path.exists(self.cache_p300) and os.path.exists(self.cache_errp) and os.path.exists(self.ctemp_positive) and os.path.exists(self.ctemp_negative) and os.path.exists(self.ctemp_feedback) and os.path.exists(self.ctemp_green) and os.path.exists(self.cache_is_short):
             pos = Template(np.load(self.ctemp_positive))
             neg = Template(np.load(self.ctemp_negative))
             fbs = np.load(self.ctemp_feedback)
             fb_temps = []
             for i in range(fbs.shape[0]):
-                fb_temps.append(Template[fbs[i]])
+                fb_temps.append(Template(fbs[i]))
+            fbs = np.load(self.ctemp_feedback_list)
+            fb_temp_list = []
+            for i in range(fbs.shape[0]):
+                fb_temp_list.append(Template(fbs[i]))
             greens = np.load(self.ctemp_green)
             green_temps = []
             for i_fb in range(greens.shape[0]):
                 green_temps.append(Template(greens[i_fb]))
-            return pos, neg, fb_temps, green_temps
+            return np.load(self.cache_p300), np.load(self.cache_errp), pos, neg, fb_temps, fb_temp_list, green_temps, np.load(self.cache_is_short)
         else:
+            features_p300 = []
+            features_errp = []
             prefix_path = 'data/train' if self.train else 'data/test'
             green_temps = []
             green_data = []
             fb_temps = []
             fb_data = []
-            pos_temp, neg_temp
+            fb_list_data = []
+            fb_list_temp = []
+            pos_temp = None
+            neg_temp = None
+            labels = []
             for i in range(1, 6):
                 file_path = f'{prefix_path}/Data_S{self.subject_name}_Sess0{i}.csv'
                 fp = FileProcessor(file_path)
+                features_p300.append(fp.extracted_features)
+                features_errp.append(fp.errps)
+
                 temp_data_list, fb_temp = fp.get_erp_templates()
                 fb_temps.append(fb_temp)
                 fb_data.append(fb_temp.errp_raw)
@@ -427,18 +461,109 @@ class SubjectData:
                     if temp_data['type'] == "green": 
                         green_temps.append(temp_data['template'])
                         green_data.append(temp_data['template'].errp_raw)
+                    elif temp_data['type'] == "feedback":
+                        fb_list_temp.append(temp_data['template'])
+                        fb_list_data.append(temp_data['template'].errp_raw)
                 
                 if i == 5:
                     pos_temp, neg_temp = fp.get_positive_negative_templates()
-                    
+
+                labels.extend(fp.get_isShort_labels())
+
+            features_p300 = np.vstack(features_p300)
+            features_errp = np.vstack(features_errp)
+
+            os.makedirs(os.path.dirname(self.cache_p300), exist_ok=True)
+            np.save(self.cache_p300, features_p300)
+            np.save(self.cache_errp, features_errp)
+
+            os.makedirs(os.path.dirname(self.ctemp_positive), exist_ok=True)
             np.save(self.ctemp_positive, pos_temp.errp_raw)
             np.save(self.ctemp_negative, neg_temp.errp_raw)
-            fb_data = np.vstack(fb_data)
-            green_data = np.vstack(green_data)
+            
+            fb_data = np.vstack(self.__truncate_lists(fb_data))
+            green_data = np.vstack(self.__truncate_lists(green_data))
             np.save(self.ctemp_feedback, fb_data)
             np.save(self.ctemp_green, green_data)
 
-            return pos_temp, neg_temp, fb_temps, green_temps
+            #for i, arr in enumerate(fb_list_data):
+            #    print(f"Array {i}: {arr.shape}")
+            fb_list_data = np.vstack(self.__truncate_lists(fb_list_data))
+            np.save(self.ctemp_feedback_list, fb_list_data)
+
+            np.save(self.cache_is_short, np.array(labels))
+            
+            return features_p300, features_errp, pos_temp, neg_temp, fb_temps, fb_list_temp, green_temps, labels
+
+
+    def __get_similarity_features(self, comp: TemplateComparer):
+        if comp.basic_template == None or comp.trial_template == None:
+            raise ValueError("basic_template AND trial_template should NOT be None!")
+        
+        features = np.zeros(8)
+        features[0] = np.mean(comp.get_area_similarity())
+        features[1] = np.mean(comp.get_chains_similarity())
+        features[2] = np.mean(comp.get_tortuosity_similarity())
+        features[3] = np.mean(comp.get_weighted_temp_similarity())
+        features[4] = np.mean(comp.get_pearson_correlation())
+        features[5] = np.mean(comp.get_cosine_similarity())
+        features[6] = np.mean(comp.get_cross_correlation_peak())
+        features[7] = np.mean(comp.get_weighted_temp_similarity())
+        return features
+    
+    def __get_similarity_with_pos_neg(self, pos_comp: TemplateComparer, neg_comp: TemplateComparer):
+        f1 = self.__get_similarity_features(pos_comp)
+        s1 = 0.6*f1[3] + 0.4*f1[7]
+        f2 = self.__get_similarity_features(neg_comp)
+        s2 = 0.6*f2[3] + 0.4*f2[7]
+        isNegative = np.zeros(1)
+        isNegative[0] = 1 if s2 >= s1 else 0
+        return np.concatenate((f1, f2, isNegative))
+
+    # feedback_templates should have a length of 5. One template per session.
+    # green_templates should have a length of 4*60+100=340. One template per green circle
+    # Compare the green circles in a session with the corresponding feedback template
+    # This function should return a numpy array of shape (340, 8)
+    def get_green_similarity(self):
+        if os.path.exists(self.cache_green_sim):
+            return np.load(self.cache_green_sim)
+        else:
+            features = np.zeros((340, 8))
+            for i in range(5):
+                feedback = self.feedback_templates[i]
+                comp = TemplateComparer(feedback)
+                upper_bound = (i+1)*60 if i < 4 else 340
+
+                for j in range(i*60, upper_bound):
+                    green = self.green_templates[j]
+                    comp.trial_template = green
+                    features[j] = self.__get_similarity_features(comp)
+
+            os.makedirs(os.path.dirname(self.cache_green_sim), exist_ok=True)
+            np.save(self.cache_green_sim, features)
+            return features
+    
+    # Compare the feedback of every trial in every session with positive and negative templates
+    # This function should return a numpy array of shape (340, 17)
+    # The last element is a binary feature called isNegative:
+    # If it's 0 it means it's more similar to the positive template otherwise it's 1
+    def get_feedback_similarity(self):
+        if os.path.exists(self.cache_fb_sim):
+            return np.load(self.cache_fb_sim)
+        else:
+            features = np.zeros((340, 17))
+            pos_comp = TemplateComparer(self.positive_template)
+            neg_comp = TemplateComparer(self.negative_template)
+            for i in range(340):
+                feedback = self.feedback_template_list[i]
+                pos_comp.trial_template = feedback
+                neg_comp.trial_template = feedback
+                features[i] = self.__get_similarity_with_pos_neg(pos_comp, neg_comp)
+
+            os.makedirs(os.path.dirname(self.cache_fb_sim), exist_ok=True)
+            np.save(self.cache_fb_sim, features)
+            return features
+
     def dbscan_features(self, pca_components=5, eps=0.5, top_percentage=0.3, verbose=False):
         """ Apply PCA and then DBSCAN clustering to classify P300 vs non-P300 windows """
         scaler = StandardScaler()
