@@ -7,7 +7,7 @@ from sklearn.preprocessing import StandardScaler
 from utils import important_channels
 import utils
 import os
-import template
+from template import Template, TemplateComparer
 
 class FileProcessor:
     def __init__(self, file_path):
@@ -53,10 +53,8 @@ class FileProcessor:
         if not self.is_last_session: return None
         return self.__cluster_time_diff(self.get_feedback_diffs())
     
-    # Return True if after the feedback with id "feedback_id" follows 
-    # a correction segment that lasts 1 second
-    def has_feedback_correction(self, feedback_id):
-        if not self.is_last_session: return False
+    def get_feedbacks_with_correction(self):
+        if not self.is_last_session: return None
 
         time_diffs = self.get_feedback_diffs()
         labels = self.get_feedback_labels()
@@ -70,7 +68,17 @@ class FileProcessor:
         
         # labels that indicate that correction follows
         correction_labels = [sorted_keys[1], sorted_keys[3]]
-        return labels[feedback_id] in correction_labels
+        feedback_correction_ids = []
+        for i in range(len(labels)):
+            if labels[i] in correction_labels:
+                feedback_correction_ids.append(i)
+        return feedback_correction_ids
+
+    # Return True if after the feedback with id "feedback_id" follows 
+    # a correction segment that lasts 1 second
+    def has_feedback_correction(self, feedback_id):
+        if not self.is_last_session: return False
+        return feedback_id in self.get_feedbacks_with_correction()
 
     def is_last_letter(self, feedback_id):
         return feedback_id % 5 == 4
@@ -156,6 +164,11 @@ class FileProcessor:
 
         return data
     
+    def get_feedback_erp_raw(self, index):
+        part, _ = utils.get_part_after_feedback(self.filtered_data, self.feedback_times, feedback_id=index, before=0.0, after=1.3)
+        part = part[important_channels]
+        return part.to_numpy().T
+
     def get_erp_templates(self):
         # template_data = {
         #   "index": 0 to len-1,
@@ -163,13 +176,67 @@ class FileProcessor:
         #   "template": Template(...)
         # } 
         template_data_list = []
-
+        errp_data = []
         # i from -1 to 58 or 98 -> after feedback with id 0 to 59 or 99
         for i in range(-1, len(self.feedback_indices)-1):
+            green_raw = []
+            blinking_raw = []
             for channel in important_channels:
                 raw_data = self.get_important_parts(i, channel)
+                green_raw.append(raw_data['green_raw'])
+                blinking_raw.append(raw_data['blinking_raw'])
 
-        return template_data_list
+            min_length = min(len(channel_data) for channel_data in green_raw)
+            green_raw = [channel_data[:min_length] for channel_data in green_raw] # truncate to have the same length in each channel
+            green_raw = np.array(green_raw)
+            green_raw = green_raw[np.newaxis, :, :] # reshape to (1, n_channels, n_samples)
+            template_data_list.append({
+                "index": i+1,
+                "type": "green",
+                "template": Template(green_raw)
+            })
+
+            min_length = min(len(channel_data) for channel_data in blinking_raw)
+            blinking_raw = [channel_data[:min_length] for channel_data in blinking_raw]
+            window_time = 0.6
+            window_size = int(window_time * self.fs)
+            window_step = int(0.25 * self.fs)
+            n_windows = (min_length - window_size) // window_step + 1
+            for window in range(n_windows):
+                part = blinking_raw[:, window*window_step:window*window_step+window_size]
+                part = part[np.newaxis, :, :]
+                template_data_list.append({
+                    "index": i+1,
+                    "type": "blinking",
+                    "template": Template(part)
+                })
+
+            errp_data.append(self.get_feedback_erp_raw(i+1))
+        min_samples = min(arr.shape[1] for arr in errp_data)
+        errp_data = [arr[:, :min_samples] for arr in errp_data]
+        errp_data = np.array(errp_data)
+        feedback_template = Template(errp_data)
+
+        return template_data_list, feedback_template
+
+    def get_positive_negative_templates(self):
+        if not self.is_last_session: return None, None
+
+        errp_pos = []
+        errp_neg = []
+        fbc = self.get_feedbacks_with_correction()
+        for i in range(len(self.feedback_indices)):
+            if i in fbc:
+                errp_neg.append(self.get_feedback_erp_raw(i))
+            else:
+                errp_pos.append(self.get_feedback_erp_raw(i))
+        min_samples = min(arr.shape[1] for arr in errp_pos)
+        errp_pos = [arr[:, :min_samples] for arr in errp_pos]
+        errp_pos = np.array(errp_pos)
+        min_samples = min(arr.shape[1] for arr in errp_neg)
+        errp_neg = [arr[:, :min_samples] for arr in errp_neg]
+        errp_neg = np.array(errp_neg)
+        return Template(errp_pos), Template(errp_neg)
 
     def sliding_window(self, feedback_id, channel):
         data = self.get_important_parts(feedback_id, channel)
@@ -301,6 +368,13 @@ class SubjectData:
         self.cache_p300 = f'cache/subject_{subject_name}_p300.npy'
         self.cache_errp = f'cache/subject_{subject_name}_errp.npy'
         self.raw_features, self.errp_features = self.__load_data()
+        
+        self.cache_template = f'cache/template/subject_{subject_name}'
+        self.ctemp_positive = f'{self.cache_template}_positive.npy'
+        self.ctemp_negative = f'{self.cache_template}_negative.npy'
+        self.ctemp_feedback = f'{self.cache_template}_feedback.npy'
+        self.ctemp_green = f'{self.cache_template}_green.npy'
+        self.positive_template, self.negative_template, self.feedback_templates, self.green_templates = self.__load_templates()
     
     def __load_data(self):
         if os.path.exists(self.cache_p300) and os.path.exists(self.cache_errp):
@@ -323,6 +397,48 @@ class SubjectData:
             
             return features_p300, features_errp
 
+    def __load_templates(self) -> tuple[Template, Template, list[Template], list[Template]]:
+        if os.path.exists(self.ctemp_positive) and os.path.exists(self.ctemp_negative) and os.path.exists(self.ctemp_feedback) and os.path.exists(self.ctemp_green):
+            pos = Template(np.load(self.ctemp_positive))
+            neg = Template(np.load(self.ctemp_negative))
+            fbs = np.load(self.ctemp_feedback)
+            fb_temps = []
+            for i in range(fbs.shape[0]):
+                fb_temps.append(Template[fbs[i]])
+            greens = np.load(self.ctemp_green)
+            green_temps = []
+            for i_fb in range(greens.shape[0]):
+                green_temps.append(Template(greens[i_fb]))
+            return pos, neg, fb_temps, green_temps
+        else:
+            prefix_path = 'data/train' if self.train else 'data/test'
+            green_temps = []
+            green_data = []
+            fb_temps = []
+            fb_data = []
+            pos_temp, neg_temp
+            for i in range(1, 6):
+                file_path = f'{prefix_path}/Data_S{self.subject_name}_Sess0{i}.csv'
+                fp = FileProcessor(file_path)
+                temp_data_list, fb_temp = fp.get_erp_templates()
+                fb_temps.append(fb_temp)
+                fb_data.append(fb_temp.errp_raw)
+                for temp_data in temp_data_list:
+                    if temp_data['type'] == "green": 
+                        green_temps.append(temp_data['template'])
+                        green_data.append(temp_data['template'].errp_raw)
+                
+                if i == 5:
+                    pos_temp, neg_temp = fp.get_positive_negative_templates()
+                    
+            np.save(self.ctemp_positive, pos_temp.errp_raw)
+            np.save(self.ctemp_negative, neg_temp.errp_raw)
+            fb_data = np.vstack(fb_data)
+            green_data = np.vstack(green_data)
+            np.save(self.ctemp_feedback, fb_data)
+            np.save(self.ctemp_green, green_data)
+
+            return pos_temp, neg_temp, fb_temps, green_temps
     def dbscan_features(self, pca_components=5, eps=0.5, top_percentage=0.3, verbose=False):
         """ Apply PCA and then DBSCAN clustering to classify P300 vs non-P300 windows """
         scaler = StandardScaler()

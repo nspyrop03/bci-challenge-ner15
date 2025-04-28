@@ -8,9 +8,7 @@ class Template:
     # of every feedback segment.
     # There is no problem if n_sequences == 1
     def __init__(self, errp_raw):        
-        min_samples = min(arr.shape[1] for arr in errp_raw)
-        truncated = [arr[:, :min_samples] for arr in errp_raw]
-        self.errp_raw = np.array(truncated)
+        self.errp_raw = errp_raw
 
     def get_coherent_average(self):
         return np.mean(self.errp_raw, axis=0)
