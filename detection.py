@@ -148,6 +148,35 @@ class FileProcessor:
             labels.append(t < 3)
         return labels
 
+    def get_segments_for_rnn(self, extra_offset=0.1):
+        data = {
+            'green': [],
+            'blinking': [],
+            'feedback': []
+        }
+
+        for fid in range(-1, len(self.feedback_indices)-1):
+            green = []
+            blinking = []
+            feedback = []
+            for ch in important_channels:
+                erp_segment = self.get_erp_segment(fid, ch)
+
+                green.append(erp_segment[:int((1.0 + extra_offset)*self.fs)])
+
+                b_start = 2.0 - extra_offset
+                b_end = b_start + self.get_blinking_time(fid, ch) + extra_offset
+                blinking.append(erp_segment[int(b_start*self.fs):int(b_end*self.fs)])
+
+            feedback.append(self.get_feedback_erp_raw(fid+1))
+
+            # append list of shape (16, samples), samples may differ
+            data['green'].append(np.array(green)) 
+            data['blinking'].append(np.array(blinking))
+            data['feedback'].append(np.array(feedback))
+            
+        return data
+
     def get_important_parts(self, feedback_id, channel, extra_offset = 0.1):
         erp_segment = self.get_erp_segment(feedback_id, channel)
         data = {}
