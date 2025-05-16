@@ -540,6 +540,26 @@ class SubjectData:
         features[7] = np.mean(comp.get_weighted_temp_similarity())
         return features
     
+    def __get_channel_similarity(self, comp: TemplateComparer):
+        if comp.basic_template == None or comp.trial_template == None:
+            raise ValueError("basic_template AND trial_template should NOT be None!")
+        
+        features = np.zeros((8, 16))
+        features[0] = comp.get_area_similarity().T
+        features[1] = comp.get_chains_similarity().T
+        features[2] = comp.get_tortuosity_similarity().T
+        features[3] = comp.get_weighted_temp_similarity().T
+        features[4] = comp.get_pearson_correlation().T
+        features[5] = comp.get_cosine_similarity().T
+        features[6] = comp.get_cross_correlation_peak().T
+        features[7] = comp.get_weighted_temp_similarity().T
+        return features.T # shape: (16, 8)
+
+    def __get_channel_with_pos_neg(self, pos_comp: TemplateComparer, neg_comp: TemplateComparer):
+        f1 = self.__get_channel_similarity(pos_comp) # (16, 8)
+        f2 = self.__get_channel_similarity(neg_comp) # (16, 8)
+        return np.hstack((f1, f2)) # (16, 16)
+
     def __get_similarity_with_pos_neg(self, pos_comp: TemplateComparer, neg_comp: TemplateComparer):
         f1 = self.__get_similarity_features(pos_comp)
         s1 = 0.6*f1[3] + 0.4*f1[7]
@@ -548,6 +568,27 @@ class SubjectData:
         isNegative = np.zeros(1)
         isNegative[0] = 1 if s2 >= s1 else 0
         return np.concatenate((f1, f2, isNegative))
+
+    def get_similarity_expanded(self):
+        features = np.zeros((340, 16, 8*3))
+        for i in range(5):
+            feedback = self.feedback_templates[i]
+            comp = TemplateComparer(feedback)
+            upper_bound = (i+1)*60 if i < 4 else 340
+
+            for j in range(i*60, upper_bound):
+                green = self.green_templates[j]
+                comp.trial_template = green
+                features[j, :, 0:8] = self.__get_channel_similarity(comp)
+        
+        pos_comp = TemplateComparer(self.positive_template)
+        neg_comp = TemplateComparer(self.negative_template)
+        for i in range(340):
+            feedback = self.feedback_template_list[i]
+            pos_comp.trial_template = feedback
+            neg_comp.trial_template = feedback
+            features[i, :, 8:24] = self.__get_channel_with_pos_neg(pos_comp, neg_comp)
+        return features
 
     # feedback_templates should have a length of 5. One template per session.
     # green_templates should have a length of 4*60+100=340. One template per green circle
